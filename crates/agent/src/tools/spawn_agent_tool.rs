@@ -5,6 +5,7 @@ use gpui::{App, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -141,6 +142,7 @@ impl AgentTool for SpawnAgentTool {
                     session_info: None,
                 })?;
 
+            let label_clone = input.label.clone();
             let (subagent, mut session_info) = cx.update(|cx| {
                 let subagent = if let Some(session_id) = input.session_id {
                     self.environment.resume_subagent(session_id, cx)
@@ -159,6 +161,13 @@ impl AgentTool for SpawnAgentTool {
                 };
 
                 event_stream.subagent_spawned(subagent.id());
+
+                log::info!(
+                    "[orchestrator] Subagent spawned: label={}, session_id={}",
+                    label_clone,
+                    subagent.id()
+                );
+
                 event_stream.update_fields_with_meta(
                     acp::ToolCallUpdateFields::new(),
                     Some(acp::Meta::from_iter([(
@@ -181,6 +190,12 @@ impl AgentTool for SpawnAgentTool {
                 "Subagent Completed",
                 subagent_session = session_info.session_id.to_string(),
                 status,
+            );
+
+            log::info!(
+                "[orchestrator] Subagent completed: session_id={}, status={}",
+                session_info.session_id,
+                status
             );
 
             session_info.message_end_index =
