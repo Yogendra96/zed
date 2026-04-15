@@ -1,0 +1,30 @@
+{
+  "providers": [
+    {
+      "name": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-your-api-key-here",
+      "default_model": "gpt-4"
+    }
+  ],
+  "custom_agents": {
+    "security_scanner": {
+      "description": "Finds security vulnerabilities in code",
+      "system_prompt": "You are a security expert. Scan the code for: SQL injection, XSS, CSRF, authentication bypasses, insecure crypto, hardcoded secrets. Return a list of issues with file:line references.",
+      "tools": ["read_file", "grep", "terminal"],
+      "max_iterations": 20
+    },
+    "performance_profiler": {
+      "description": "Analyzes code for performance issues",
+      "system_prompt": "You are a performance expert. Analyze code for: O(n) complexity issues, unnecessary allocations, database N+1 queries, missing caching opportunities. Suggest specific optimizations.",
+      "tools": ["read_file", "grep"],
+      "max_iterations": 15
+    },
+    "doc_writer": {
+      "description": "Generates documentation",
+      "system_prompt": "You are a technical writer. Generate clear README documentation, API docs, and code comments. Use Markdown format.",
+      "tools": ["read_file", "edit_file"],
+      "max_iterations": 10
+    }
+  }
+}
