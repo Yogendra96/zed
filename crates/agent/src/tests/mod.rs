@@ -5292,7 +5292,7 @@ async fn test_subagent_thread_inherits_parent_thread_properties(cx: &mut TestApp
         )
     });
 
-    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, cx));
+    let subagent_thread = cx.new(|cx| Thread::new_subagent(&parent_thread, None, cx));
     subagent_thread.read_with(cx, |subagent_thread, cx| {
         assert!(subagent_thread.is_subagent());
         assert_eq!(subagent_thread.depth(), 1);
@@ -5348,7 +5348,7 @@ async fn test_max_subagent_depth_prevents_tool_registration(cx: &mut TestAppCont
         thread
     });
     let deep_subagent_thread = cx.new(|cx| {
-        let mut thread = Thread::new_subagent(&deep_parent_thread, cx);
+        let mut thread = Thread::new_subagent(&deep_parent_thread, None, cx);
         thread.add_default_tools(environment, cx);
         thread
     });
@@ -5390,7 +5390,7 @@ async fn test_parent_cancel_stops_subagent(cx: &mut TestAppContext) {
         )
     });
 
-    let subagent = cx.new(|cx| Thread::new_subagent(&parent, cx));
+    let subagent = cx.new(|cx| Thread::new_subagent(&parent, None, cx));
 
     parent.update(cx, |thread, _cx| {
         thread.register_running_subagent(subagent.downgrade());

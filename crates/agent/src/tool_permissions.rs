@@ -600,6 +600,8 @@ mod tests {
             new_thread_location: Default::default(),
             sidebar_side: Default::default(),
             thinking_display: Default::default(),
+            subagent_model: Default::default(),
+            subagents_enabled: false,
         }
     }
 

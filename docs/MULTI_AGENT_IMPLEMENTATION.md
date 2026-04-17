@@ -52,11 +52,11 @@ Added explicit rules for multi-agent delegation:
 
 2. **Tool Permission Default**
    - Change default from `Confirm` to `Allow` in settings
-   - Currently scattered across 20+ files with mixed defaults
+   - Currently scattered across 20+ files with mixed defaults (SKIPPED - too risky)
 
-3. **Logging Enhancement**
-   - Log sub-agent spawns to file (currently only in memory)
-   - Add to `Zed.log` for debugging
+3. ~~Logging Enhancement~~ - DONE
+   - Log sub-agent spawns to Zed.log
+   - Added via log::info! in spawn_agent_tool.rs
 
 ### Medium Term
 4. **Dynamic Agent Configuration**

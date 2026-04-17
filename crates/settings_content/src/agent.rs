@@ -231,6 +231,16 @@ pub struct AgentSettingsContent {
     /// `always_confirm`) match against the tool's text input (command, path,
     /// URL, etc.).
     pub tool_permissions: Option<ToolPermissionsContent>,
+
+    /// Whether the subagentic workflow is enabled. When false, the
+    /// `spawn_agent` tool is disabled and the main agent works alone.
+    ///
+    /// Default: true
+    pub subagents_enabled: Option<bool>,
+
+    /// Model configuration for subagents spawned by the main agent.
+    /// By default subagents inherit the main agent's model.
+    pub subagent_model: Option<SubagentModelContent>,
 }
 
 impl AgentSettingsContent {
@@ -399,6 +409,28 @@ pub struct LanguageModelSelection {
     pub enable_thinking: bool,
     pub effort: Option<String>,
     pub speed: Option<language_model_core::Speed>,
+}
+
+/// Configuration for which model subagents should use.
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct SubagentModelContent {
+    /// When true, subagents inherit the model from the main agent thread.
+    /// When false, `default_model` is used if set, otherwise falls back to the main model.
+    ///
+    /// Default: true
+    pub use_main_model: Option<bool>,
+
+    /// Model to use for all subagents when `use_main_model` is false.
+    /// Has no effect when `use_main_model` is true.
+    pub default_model: Option<LanguageModelSelection>,
+
+    /// Per-task-type model overrides. Keys are task type labels
+    /// (e.g. "security", "performance", "quality", "test", "explain").
+    /// When the spawned subagent label matches a key, the associated model is used
+    /// regardless of `use_main_model`.
+    #[serde(default)]
+    pub task_overrides: HashMap<String, LanguageModelSelection>,
 }
 
 #[with_fallible_options]

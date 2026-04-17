@@ -7,6 +7,7 @@ mod tool_picker;
 use std::{ops::Range, rc::Rc, sync::Arc};
 
 use agent::ContextServerRegistry;
+use agent_settings::AgentSettings;
 use anyhow::Result;
 use cloud_api_types::Plan;
 use collections::HashMap;
@@ -22,20 +23,21 @@ use gpui::{
 use itertools::Itertools;
 use language::LanguageRegistry;
 use language_model::{
-    IconOrSvg, LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry,
-    ZED_CLOUD_PROVIDER_ID,
+    ConfiguredModel, IconOrSvg, LanguageModelProvider, LanguageModelProviderId,
+    LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID,
 };
 use language_models::AllLanguageModelSettings;
 use notifications::status_toast::{StatusToast, ToastIcon};
+use picker::popover_menu::PickerPopoverMenu;
 use project::{
     agent_server_store::{AgentId, AgentServerStore, ExternalAgentSource},
     context_server_store::{ContextServerConfiguration, ContextServerStatus, ContextServerStore},
 };
-use settings::{Settings, SettingsStore, update_settings_file};
+use settings::{Settings, SettingsStore, SubagentModelContent, update_settings_file};
 use ui::{
     AiSettingItem, AiSettingItemSource, AiSettingItemStatus, ButtonStyle, Chip, ContextMenu,
     ContextMenuEntry, Disclosure, Divider, DividerColor, ElevationIndex, LabelSize, PopoverMenu,
-    Switch, Tooltip, WithScrollbar, prelude::*,
+    PopoverMenuHandle, Switch, Tooltip, WithScrollbar, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, create_and_open_local_file};
@@ -49,6 +51,8 @@ use crate::{
     Agent,
     agent_configuration::add_llm_provider_modal::{AddLlmProviderModal, LlmCompatibleProvider},
     agent_connection_store::{AgentConnectionStatus, AgentConnectionStore},
+    language_model_selector::{LanguageModelSelector, language_model_selector},
+    ui::ModelSelectorTooltip,
 };
 
 pub struct AgentConfiguration {
@@ -62,6 +66,8 @@ pub struct AgentConfiguration {
     context_server_store: Entity<ContextServerStore>,
     expanded_provider_configurations: HashMap<LanguageModelProviderId, bool>,
     context_server_registry: Entity<ContextServerRegistry>,
+    subagent_model_selector: Entity<LanguageModelSelector>,
+    subagent_model_menu_handle: PopoverMenuHandle<LanguageModelSelector>,
     _subscriptions: Vec<Subscription>,
     scroll_handle: ScrollHandle,
 }
@@ -79,6 +85,73 @@ impl AgentConfiguration {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+
+        let subagent_model_menu_handle = PopoverMenuHandle::default();
+        let subagent_model_selector = {
+            let fs = fs.clone();
+            cx.new(|cx| {
+                language_model_selector(
+                    |cx| {
+                        let sel = AgentSettings::get_global(cx)
+                            .subagent_model
+                            .default_model
+                            .clone()?;
+                        let registry = LanguageModelRegistry::read_global(cx);
+                        let provider_id =
+                            language_model::LanguageModelProviderId::from(sel.provider.0.clone());
+                        let model_id =
+                            language_model::LanguageModelId::from(sel.model.clone());
+                        let provider = registry.provider(&provider_id)?;
+                        let model = registry
+                            .available_models(cx)
+                            .find(|m| m.id() == model_id)?;
+                        Some(ConfiguredModel { provider, model })
+                    },
+                    {
+                        let fs = fs.clone();
+                        move |model: Arc<dyn language_model::LanguageModel>, cx: &mut App| {
+                            let provider = model.provider_id().0.to_string();
+                            let model_id = model.id().0.to_string();
+                            update_settings_file(
+                                fs.clone(),
+                                cx,
+                                move |settings, _cx| {
+                                    let subagent =
+                                        settings.agent.get_or_insert_default().subagent_model
+                                            .get_or_insert_with(SubagentModelContent::default);
+                                    subagent.use_main_model = Some(false);
+                                    subagent.default_model =
+                                        Some(settings::LanguageModelSelection {
+                                            provider: provider.clone().into(),
+                                            model: model_id.clone(),
+                                            enable_thinking: false,
+                                            effort: None,
+                                            speed: None,
+                                        });
+                                },
+                            );
+                        }
+                    },
+                    {
+                        let fs = fs.clone();
+                        move |model: Arc<dyn language_model::LanguageModel>,
+                              should_be_favorite: bool,
+                              cx: &mut App| {
+                            crate::favorite_models::toggle_in_settings(
+                                model,
+                                should_be_favorite,
+                                fs.clone(),
+                                cx,
+                            );
+                        }
+                    },
+                    true,
+                    focus_handle.clone(),
+                    window,
+                    cx,
+                )
+            })
+        };
 
         let subscriptions = vec![
             cx.subscribe_in(
@@ -113,6 +186,8 @@ impl AgentConfiguration {
             context_server_store,
             expanded_provider_configurations: HashMap::default(),
             context_server_registry,
+            subagent_model_selector,
+            subagent_model_menu_handle,
             _subscriptions: subscriptions,
             scroll_handle: ScrollHandle::new(),
         };
@@ -1255,6 +1330,150 @@ impl AgentConfiguration {
             .when_some(restart_button, |this, button| this.action(button))
             .when_some(uninstall_button, |this, button| this.action(button))
     }
+
+    fn render_subagent_model_section(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let settings = AgentSettings::get_global(cx);
+        let enabled = settings.subagents_enabled;
+        let use_main_model = settings.subagent_model.use_main_model;
+
+        let current_model_name: SharedString = if use_main_model {
+            "Inherits main model".into()
+        } else {
+            self.subagent_model_selector
+                .read(cx)
+                .delegate
+                .active_model(cx)
+                .map(|m| m.model.name().0)
+                .unwrap_or_else(|| "Select a model".into())
+        };
+
+        let fs = self.fs.clone();
+
+        let model_popover: Option<gpui::AnyElement> = if enabled && !use_main_model {
+            let active_model = self.subagent_model_selector.read(cx).delegate.active_model(cx);
+            let provider_icon = active_model.as_ref().map(|m| m.provider.icon());
+            let button = Button::new("subagent-model-select", current_model_name.clone())
+                .label_size(LabelSize::Small)
+                .style(ButtonStyle::Outlined)
+                .when_some(provider_icon, |btn, icon| {
+                    btn.start_icon(
+                        match icon {
+                            IconOrSvg::Svg(path) => Icon::from_external_svg(path),
+                            IconOrSvg::Icon(name) => Icon::new(name),
+                        }
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                    )
+                })
+                .end_icon(
+                    Icon::new(IconName::ChevronDown)
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                );
+            let rendered = PickerPopoverMenu::new(
+                self.subagent_model_selector.clone(),
+                button,
+                Tooltip::element(|_, _| ModelSelectorTooltip::new().into_any_element()),
+                Corner::TopRight,
+                cx,
+            )
+            .with_handle(self.subagent_model_menu_handle.clone())
+            .offset(gpui::Point { x: px(0.0), y: px(2.0) })
+            .render(window, cx)
+            .into_any_element();
+            Some(rendered)
+        } else {
+            None
+        };
+
+        v_flex()
+            .min_w_0()
+            .w_full()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .child(self.render_section_title(
+                "Subagents",
+                "Enable subagents to allow the main agent to spawn specialized agents.",
+                div().into_any_element(),
+            ))
+            .child(
+                v_flex()
+                    .px_4()
+                    .pb_4()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .child(Label::new("Enable subagents").size(LabelSize::Small))
+                            .child(
+                                Switch::new("subagent-enabled", enabled.into()).on_click({
+                                    let fs = fs.clone();
+                                    move |state, _window, cx| {
+                                        let enabled = matches!(state, ToggleState::Selected);
+                                        update_settings_file(fs.clone(), cx, move |settings, _| {
+                                            settings.agent.get_or_insert_default().subagents_enabled =
+                                                Some(enabled);
+                                        });
+                                    }
+                                }),
+                            ),
+                    )
+                    .when(enabled, |this| {
+                        this.child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(
+                                            Label::new("Use main agent's model")
+                                                .size(LabelSize::Small),
+                                        )
+                                        .child(
+                                            Label::new("When enabled, subagents inherit the active model.")
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        ),
+                                )
+                                .child(
+                                    Switch::new("subagent-use-main-model", use_main_model.into()).on_click({
+                                        let fs = fs.clone();
+                                        move |state, _window, cx| {
+                                            let use_main = matches!(state, ToggleState::Selected);
+                                            update_settings_file(fs.clone(), cx, move |settings, _| {
+                                                settings
+                                                    .agent
+                                                    .get_or_insert_default()
+                                                    .subagent_model
+                                                    .get_or_insert_with(SubagentModelContent::default)
+                                                    .use_main_model = Some(use_main);
+                                            });
+                                        }
+                                    }),
+                                ),
+                        )
+                        .when_some(model_popover, |this, rendered_menu| {
+                            this.child(
+                                h_flex()
+                                    .w_full()
+                                    .justify_between()
+                                    .child(
+                                        Label::new("Override model")
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(rendered_menu),
+                            )
+                        })
+                    }),
+            )
+    }
 }
 
 impl Render for AgentConfiguration {
@@ -1277,6 +1496,7 @@ impl Render for AgentConfiguration {
                             .size_full()
                             .min_w_0()
                             .overflow_y_scroll()
+                            .child(self.render_subagent_model_section(window, cx))
                             .child(self.render_agent_servers_section(cx))
                             .child(self.render_context_servers_section(cx))
                             .child(self.render_provider_configuration_section(cx)),

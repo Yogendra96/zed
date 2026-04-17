@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use std::sync::{Arc, LazyLock};
 
 use agent_client_protocol::ModelId;
-use collections::{HashSet, IndexMap};
+use collections::{HashMap, HashSet, IndexMap};
 use fs::Fs;
 use futures::channel::oneshot;
 use gpui::{App, Pixels, px};
@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use settings::{
     DockPosition, DockSide, LanguageModelParameters, LanguageModelSelection, NewThreadLocation,
     NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, RegisterSetting, Settings, SettingsContent,
-    SettingsStore, SidebarDockPosition, SidebarSide, ThinkingBlockDisplay, ToolPermissionMode,
-    update_settings_file, update_settings_file_with_completion,
+    SidebarDockPosition, SidebarSide, SubagentModelContent, ThinkingBlockDisplay,
+    ToolPermissionMode, SettingsStore, update_settings_file, update_settings_file_with_completion,
 };
 
 pub use crate::agent_profile::*;
@@ -168,6 +168,8 @@ pub struct AgentSettings {
     pub show_merge_conflict_indicator: bool,
     pub tool_permissions: ToolPermissions,
     pub new_thread_location: NewThreadLocation,
+    pub subagents_enabled: bool,
+    pub subagent_model: SubagentModelSettings,
 }
 
 impl AgentSettings {
@@ -314,6 +316,53 @@ impl ToolPermissions {
         self.tools
             .values()
             .any(|rules| !rules.invalid_patterns.is_empty())
+    }
+}
+
+/// Compiled, ready-to-use subagent model configuration derived from settings.
+#[derive(Clone, Debug, Default)]
+pub struct SubagentModelSettings {
+    /// When `true`, subagents inherit the model from the parent thread.
+    pub use_main_model: bool,
+    /// Override model for all subagents (when `use_main_model` is `false`).
+    pub default_model: Option<LanguageModelSelection>,
+    /// Per-task-type overrides keyed by the subagent label keyword.
+    pub task_overrides: HashMap<String, LanguageModelSelection>,
+}
+
+impl SubagentModelSettings {
+    fn from_content(content: Option<SubagentModelContent>) -> Self {
+        let Some(content) = content else {
+            return Self {
+                use_main_model: true,
+                default_model: None,
+                task_overrides: HashMap::default(),
+            };
+        };
+        Self {
+            use_main_model: content.use_main_model.unwrap_or(true),
+            default_model: content.default_model,
+            task_overrides: content.task_overrides,
+        }
+    }
+
+    /// Selects the appropriate model selection for a subagent with the given label.
+    ///
+    /// Priority order:
+    ///   1. A `task_overrides` entry whose key appears in the label (case-insensitive).
+    ///   2. `default_model` when `use_main_model` is `false`.
+    ///   3. `None`, signalling that the parent thread's model should be used.
+    pub fn select_for_label(&self, label: &str) -> Option<&LanguageModelSelection> {
+        let label_lower = label.to_lowercase();
+        for (task_key, selection) in &self.task_overrides {
+            if label_lower.contains(task_key.to_lowercase().as_str()) {
+                return Some(selection);
+            }
+        }
+        if !self.use_main_model {
+            return self.default_model.as_ref();
+        }
+        None
     }
 }
 
@@ -627,6 +676,8 @@ impl Settings for AgentSettings {
             show_merge_conflict_indicator: agent.show_merge_conflict_indicator.unwrap(),
             tool_permissions: compile_tool_permissions(agent.tool_permissions),
             new_thread_location: agent.new_thread_location.unwrap_or_default(),
+            subagents_enabled: agent.subagents_enabled.unwrap_or(true),
+            subagent_model: SubagentModelSettings::from_content(agent.subagent_model),
         }
     }
 }

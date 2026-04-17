@@ -989,7 +989,11 @@ impl Thread {
             .embedded_context(true)
     }
 
-    pub fn new_subagent(parent_thread: &Entity<Thread>, cx: &mut Context<Self>) -> Self {
+    pub fn new_subagent(
+        parent_thread: &Entity<Thread>,
+        _model_override: Option<&LanguageModelSelection>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let project = parent_thread.read(cx).project.clone();
         let project_context = parent_thread.read(cx).project_context.clone();
         let context_server_registry = parent_thread.read(cx).context_server_registry.clone();
@@ -1570,7 +1574,7 @@ impl Thread {
         self.add_tool(TerminalTool::new(self.project.clone(), environment.clone()));
         self.add_tool(WebSearchTool);
 
-        if self.depth() < MAX_SUBAGENT_DEPTH {
+        if !self.is_subagent() {
             self.add_tool(SpawnAgentTool::new(environment));
         }
     }
@@ -4175,7 +4179,7 @@ mod tests {
         cx.update(|cx| {
             let mut subagents = Vec::new();
             for _ in 0..count {
-                let subagent = cx.new(|cx| Thread::new_subagent(parent, cx));
+                let subagent = cx.new(|cx| Thread::new_subagent(parent, None, cx));
                 parent.update(cx, |thread, _cx| {
                     thread.register_running_subagent(subagent.downgrade());
                 });

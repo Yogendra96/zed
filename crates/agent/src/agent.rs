@@ -48,7 +48,8 @@ use prompt_store::{
     WorktreeContext,
 };
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelSelection, update_settings_file};
+use settings::{LanguageModelSelection, Settings, update_settings_file};
+use agent_settings::AgentSettings;
 use std::any::Any;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -1797,9 +1798,17 @@ impl NativeThreadEnvironment {
             ));
         }
 
+        let subagent_settings = AgentSettings::get_global(cx).subagent_model.clone();
+        let model_override = subagent_settings.select_for_label(&label).cloned();
+
+        let model_info = model_override
+            .as_ref()
+            .map(|sel| format!("{}/{}", sel.provider.0, sel.model));
+
         let subagent_thread: Entity<Thread> = cx.new(|cx| {
-            let mut thread = Thread::new_subagent(&parent_thread_entity, cx);
-            thread.set_title(label.into(), cx);
+            let mut thread =
+                Thread::new_subagent(&parent_thread_entity, model_override.as_ref(), cx);
+            thread.set_title(label.clone().into(), cx);
             thread
         });
 
@@ -1825,6 +1834,21 @@ impl NativeThreadEnvironment {
             depth,
             is_resumed = false,
         );
+
+        if let Some(model) = model_info {
+            log::info!(
+                "[orchestrator] Subagent created: label={}, session_id={}, model={}",
+                label,
+                session_id,
+                model
+            );
+        } else {
+            log::info!(
+                "[orchestrator] Subagent created: label={}, session_id={}, model=<inherited>",
+                label,
+                session_id
+            );
+        }
 
         self.prompt_subagent(session_id, subagent_thread, acp_thread)
     }

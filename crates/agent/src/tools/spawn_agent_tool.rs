@@ -1,11 +1,12 @@
 use acp_thread::{SUBAGENT_SESSION_INFO_META_KEY, SubagentSessionInfo};
 use agent_client_protocol as acp;
+use agent_settings::AgentSettings;
 use anyhow::Result;
 use gpui::{App, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use settings::Settings;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -144,6 +145,15 @@ impl AgentTool for SpawnAgentTool {
 
             let label_clone = input.label.clone();
             let (subagent, mut session_info) = cx.update(|cx| {
+                if !AgentSettings::get_global(cx).subagents_enabled {
+                    return Err(SpawnAgentToolOutput::Error {
+                        session_id: None,
+                        error: "Subagentic workflow is disabled. Enable it in Agent settings."
+                            .to_string(),
+                        session_info: None,
+                    });
+                }
+
                 let subagent = if let Some(session_id) = input.session_id {
                     self.environment.resume_subagent(session_id, cx)
                 } else {
@@ -207,14 +217,20 @@ impl AgentTool for SpawnAgentTool {
             )]));
 
             let (output, result) = match send_result {
-                Ok(output) => (
-                    output.clone(),
-                    Ok(SpawnAgentToolOutput::Success {
-                        session_id: session_info.session_id.clone(),
-                        session_info,
-                        output,
-                    }),
-                ),
+                Ok(output) => {
+                    let mut final_output = output.clone();
+                    if final_output.len() > 10000 {
+                        final_output = format!("{}\n\n...[Output truncated due to context limits. See subagent thread for full details]...", &final_output[..10000]);
+                    }
+                    (
+                        final_output.clone(),
+                        Ok(SpawnAgentToolOutput::Success {
+                            session_id: session_info.session_id.clone(),
+                            session_info,
+                            output: final_output,
+                        }),
+                    )
+                }
                 Err(e) => {
                     let error = e.to_string();
                     (
